@@ -13,9 +13,16 @@ import {
 interface TabNavigationProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  isOpen: boolean;
+  setIsOpen: (open: boolean) => void;
 }
 
-export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActiveTab }) => {
+export const TabNavigation: React.FC<TabNavigationProps> = ({
+  activeTab,
+  setActiveTab,
+  isOpen,
+  setIsOpen
+}) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'image', label: 'Image Forensics', icon: Image },
@@ -51,7 +58,10 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActi
             <button
               key={item.id}
               className={`nav-item ${isActive ? 'active' : ''}`}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                setActiveTab(item.id);
+                setIsOpen(false);
+              }}
             >
               {isActive && <div className="nav-active-bar" />}
               <IconComponent className="nav-icon" />
@@ -83,7 +93,14 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActi
           position: fixed;
           left: 0;
           top: 0;
-          z-index: 100;
+          z-index: 1000;
+          transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @media (max-width: 1024px) {
+          .cyber-sidebar {
+            transform: translateX(${isOpen ? '0' : '-100%'});
+          }
         }
 
         .brand-container {
