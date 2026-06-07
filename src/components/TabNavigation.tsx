@@ -7,7 +7,8 @@ import {
   Camera,
   Shield,
   Activity,
-  Globe
+  Globe,
+  Lock
 } from 'lucide-react';
 
 interface TabNavigationProps {
@@ -30,6 +31,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
     { id: 'video', label: 'Video Scanner', icon: Video },
     { id: 'live', label: 'Live Webcam Scanner', icon: Camera },
     { id: 'footprint', label: 'Footprint Tracer', icon: Globe },
+    { id: 'admin', label: 'Admin Portal', icon: Lock },
   ];
 
   return (

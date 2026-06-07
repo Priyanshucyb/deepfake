@@ -7,6 +7,7 @@ import { VideoForensics } from './components/VideoForensics';
 import { LiveScanner } from './components/LiveScanner';
 import { FootprintScanner } from './components/FootprintScanner';
 import { ForensicChatbot } from './components/ForensicChatbot';
+import { AdminPortal } from './components/AdminPortal';
 import { Menu, X, Shield } from 'lucide-react';
 
 export default function App() {
@@ -130,6 +131,8 @@ export default function App() {
         {activeTab === 'live' && <LiveScanner />}
 
         {activeTab === 'footprint' && <FootprintScanner />}
+
+        {activeTab === 'admin' && <AdminPortal />}
       </main>
 
       <ForensicChatbot
