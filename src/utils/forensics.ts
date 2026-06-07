@@ -104,13 +104,13 @@ export function performPixelForensics(
   const warnings: string[] = [];
   
   // Dynamic scale: if flat regions are artificially smooth, it represents a deepfake/AI texture grain signature!
-  const varianceScore = Math.min(99, Math.round(smoothRatio * 240));
-  const chromaticScore = Math.min(99, Math.round(alignmentRatio * 150));
+  const varianceScore = Math.min(95, Math.round(smoothRatio * 110));
+  const chromaticScore = Math.min(95, Math.round(alignmentRatio * 80));
 
-  if (varianceScore > 35) {
+  if (varianceScore > 50) {
     warnings.push('Atypical flat sensor noise floor: indicates artificial texture synthesis (GAN smooth skin artifact).');
   }
-  if (chromaticScore > 40) {
+  if (chromaticScore > 55) {
     warnings.push('Absence of lens dispersion: Red and Green color edges exhibit perfect synthetic alignment.');
   }
 
@@ -242,8 +242,12 @@ export function performELA(
             
             // Adjust anomaly score based on pixel textures (flat noise floor or high gradient alignment)
             const textureRisk = Math.max(textureAnalysis.varianceScore, textureAnalysis.chromaticScore);
-            if (textureRisk > 35) {
-              anomalyScore = Math.min(100, Math.round(anomalyScore * 0.4 + textureRisk * 0.7));
+            if (textureRisk > 50 && anomalyScore > 20) {
+              // Major boost only if ELA base anomaly is already elevated (editing + smooth textures)
+              anomalyScore = Math.min(100, Math.round(anomalyScore * 0.5 + textureRisk * 0.5));
+            } else if (textureRisk > 60) {
+              // Minor contribution if image is extremely smooth but ELA has no editing mismatches
+              anomalyScore = Math.min(100, Math.max(anomalyScore, Math.round(anomalyScore * 0.85 + textureRisk * 0.15)));
             }
             
             if (anomalyScore < 5) anomalyScore = 5; // Base noise
