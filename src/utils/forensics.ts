@@ -47,6 +47,7 @@ export function performPixelForensics(
   let checkedEdges = 0;
 
   const patchVariances: number[] = [];
+  const patchNoiseVariances: number[] = [];
   const patchAutocors: number[] = [];
 
   for (const patch of patches) {
@@ -60,6 +61,10 @@ export function performPixelForensics(
     let diff1Sum = 0;
     let diff2Sum = 0;
 
+    let noiseSum = 0;
+    let noiseSumSq = 0;
+    let noiseCount = 0;
+
     for (let i = 0; i < pixelCount; i++) {
       const idx = i * 4;
       const g = pixels[idx + 1]; // Green channel
@@ -71,12 +76,22 @@ export function performPixelForensics(
         const nextG2 = pixels[(i + 2) * 4 + 1];
         diff1Sum += Math.abs(g - nextG1);
         diff2Sum += Math.abs(g - nextG2);
+
+        // High-pass filter (difference between adjacent pixels)
+        const diff = g - nextG1;
+        noiseSum += diff;
+        noiseSumSq += diff * diff;
+        noiseCount++;
       }
     }
 
     const mean = sum / pixelCount;
     const variance = (sumSq / pixelCount) - (mean * mean);
     patchVariances.push(variance);
+
+    const noiseMean = noiseSum / (noiseCount || 1);
+    const noiseVariance = (noiseSumSq / (noiseCount || 1)) - (noiseMean * noiseMean);
+    patchNoiseVariances.push(noiseVariance);
 
     const autocor = diff1Sum > 0 ? (diff2Sum / diff1Sum) : 1.0;
     patchAutocors.push(autocor);
@@ -142,26 +157,30 @@ export function performPixelForensics(
   const chromaticScore = Math.min(95, Math.round(alignmentRatio * 80));
 
   // 1. Noise Floor Discrepancy (Splicing Check)
+  // 1. Noise Floor Discrepancy (Splicing Check) via High-Pass Noise Variance
   let splicingRisk = 0;
-  if (patchVariances.length >= 3) {
-    const centerVar = patchVariances[0];
-    const cornerVars = patchVariances.slice(1);
+  if (patchNoiseVariances.length >= 3) {
+    const centerVar = patchNoiseVariances[0];
+    const cornerVars = patchNoiseVariances.slice(1);
     const avgCornerVar = cornerVars.reduce((a, b) => a + b, 0) / cornerVars.length;
     
     const ratio = avgCornerVar > 0 ? (centerVar / avgCornerVar) : 1.0;
     const invRatio = ratio > 0 ? (1 / ratio) : 1.0;
     const maxRatio = Math.max(ratio, invRatio);
     
-    // If maxRatio is high, it means noise profiles are inconsistent (e.g. face pasted onto background)
-    splicingRisk = Math.min(95, Math.max(0, Math.round((maxRatio - 1.25) * 35)));
+    // Splicing thresholds: maxRatio > 1.3 begins flagging
+    splicingRisk = Math.min(95, Math.max(0, Math.round((maxRatio - 1.3) * 45)));
   }
 
   // 2. Checkerboard grid upsampling (AI Generation Signature)
+  // Only evaluate checkerboard correlations on patches with active texture/contrast to avoid flat area false alarms
   let aiGridRisk = 0;
-  if (patchAutocors.length > 0) {
-    const avgAutocor = patchAutocors.reduce((a, b) => a + b, 0) / patchAutocors.length;
-    if (avgAutocor < 1.05) {
-      aiGridRisk = Math.min(95, Math.max(0, Math.round((1.05 - avgAutocor) * 190)));
+  const activeAutocors = patchAutocors.filter((_, idx) => patchVariances[idx] > 12);
+  if (activeAutocors.length > 0) {
+    const avgAutocor = activeAutocors.reduce((a, b) => a + b, 0) / activeAutocors.length;
+    // Autocorrelation below 0.98 signifies periodic upsampling checkerboard grid spacing
+    if (avgAutocor < 0.98) {
+      aiGridRisk = Math.min(95, Math.max(0, Math.round((0.98 - avgAutocor) * 280)));
     }
   }
 
@@ -313,13 +332,19 @@ export function performELA(
             const aiGridRisk = textureAnalysis.aiGridRisk;
             const textureRisk = Math.max(textureAnalysis.varianceScore, textureAnalysis.chromaticScore);
 
-            // Combined overall image anomaly score
-            let anomalyScore = Math.round(
-              elaAnomalyScore * 0.3 + 
-              splicingRisk * 0.25 + 
-              aiGridRisk * 0.25 + 
-              textureRisk * 0.2
+            // Combined overall image anomaly score (maximum threat indicator)
+            let anomalyScore = Math.max(
+              elaAnomalyScore,
+              splicingRisk,
+              aiGridRisk,
+              textureRisk
             );
+
+            // If multiple moderate risks are active, amplify the overall threat score
+            const activeRisks = [elaAnomalyScore, splicingRisk, aiGridRisk, textureRisk].filter(r => r > 35);
+            if (activeRisks.length >= 2) {
+              anomalyScore = Math.min(100, Math.round(anomalyScore * 0.9 + 15));
+            }
             
             anomalyScore = Math.min(100, Math.max(5, anomalyScore));
 
