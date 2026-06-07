@@ -139,7 +139,7 @@ export const ReportExporter: React.FC<ReportExporterProps> = ({
           </div>
           <div className="brand-url-side">
             <span className="official-badge-lbl">OFFICIAL DIAGNOSTIC AUDIT</span>
-            <span className="lab-url">www.defend.ai</span>
+            <span className="lab-url">defendai.vercel.app</span>
           </div>
         </div>
 
