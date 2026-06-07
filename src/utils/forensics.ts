@@ -14,10 +14,13 @@ export interface ELAResult {
 export interface TextureAnalysis {
   varianceScore: number; // 0 to 100 (high = artificial smoothness)
   chromaticScore: number; // 0 to 100 (high = artificial color alignment)
+  splicingRisk: number;
+  aiGridRisk: number;
   warnings: string[];
 }
 
-// Pixel Forensics: Checks for lack of camera sensor noise (overly smooth) and perfect chromatic channel alignment (lack of lens aberration)
+// Pixel Forensics: Checks for lack of camera sensor noise (overly smooth), perfect chromatic channel alignment,
+// noise floor discrepancies (splicing), and upsampling grid correlations (AI generator check).
 export function performPixelForensics(
   canvasOrig: HTMLCanvasElement,
   width: number,
@@ -25,7 +28,7 @@ export function performPixelForensics(
 ): TextureAnalysis {
   const ctx = canvasOrig.getContext('2d');
   if (!ctx) {
-    return { varianceScore: 0, chromaticScore: 0, warnings: [] };
+    return { varianceScore: 0, chromaticScore: 0, splicingRisk: 0, aiGridRisk: 0, warnings: [] };
   }
 
   // Define 5 coordinates (Center, Top-Left, Top-Right, Bottom-Left, Bottom-Right)
@@ -43,9 +46,40 @@ export function performPixelForensics(
   let gradientAlignmentCount = 0;
   let checkedEdges = 0;
 
+  const patchVariances: number[] = [];
+  const patchAutocors: number[] = [];
+
   for (const patch of patches) {
     const imgData = ctx.getImageData(patch.x, patch.y, size, size);
     const pixels = imgData.data;
+
+    let sum = 0;
+    let sumSq = 0;
+    const pixelCount = size * size;
+
+    let diff1Sum = 0;
+    let diff2Sum = 0;
+
+    for (let i = 0; i < pixelCount; i++) {
+      const idx = i * 4;
+      const g = pixels[idx + 1]; // Green channel
+      sum += g;
+      sumSq += g * g;
+
+      if (i < pixelCount - 2) {
+        const nextG1 = pixels[(i + 1) * 4 + 1];
+        const nextG2 = pixels[(i + 2) * 4 + 1];
+        diff1Sum += Math.abs(g - nextG1);
+        diff2Sum += Math.abs(g - nextG2);
+      }
+    }
+
+    const mean = sum / pixelCount;
+    const variance = (sumSq / pixelCount) - (mean * mean);
+    patchVariances.push(variance);
+
+    const autocor = diff1Sum > 0 ? (diff2Sum / diff1Sum) : 1.0;
+    patchAutocors.push(autocor);
 
     for (let y = 0; y < size - 4; y += 4) {
       for (let x = 0; x < size - 4; x += 4) {
@@ -70,13 +104,13 @@ export function performPixelForensics(
         // Variance of block (Green channel)
         const avg = gValues.reduce((a, b) => a + b, 0) / 16;
         const avgSq = gValues.reduce((a, b) => a + b * b, 0) / 16;
-        const variance = avgSq - avg * avg;
+        const varianceBlock = avgSq - avg * avg;
 
-        // If variance is moderate (indicates a flat textured region like skin, wall, background, not a high contrast edge)
-        if (variance < 45.0) {
+        // If variance is moderate (indicates a flat textured region like skin, wall)
+        if (varianceBlock < 45.0) {
           flatBlocksCount++;
           // Real sensors show grain (variance > 1.5). AI flat textures are mathematically zero grain (variance < 0.9)
-          if (variance < 0.95 && variance > 0.005) {
+          if (varianceBlock < 0.95 && varianceBlock > 0.005) {
             smoothBlocksCount++;
           }
         }
@@ -103,9 +137,33 @@ export function performPixelForensics(
 
   const warnings: string[] = [];
   
-  // Dynamic scale: if flat regions are artificially smooth, it represents a deepfake/AI texture grain signature!
+  // Dynamic scale
   const varianceScore = Math.min(95, Math.round(smoothRatio * 110));
   const chromaticScore = Math.min(95, Math.round(alignmentRatio * 80));
+
+  // 1. Noise Floor Discrepancy (Splicing Check)
+  let splicingRisk = 0;
+  if (patchVariances.length >= 3) {
+    const centerVar = patchVariances[0];
+    const cornerVars = patchVariances.slice(1);
+    const avgCornerVar = cornerVars.reduce((a, b) => a + b, 0) / cornerVars.length;
+    
+    const ratio = avgCornerVar > 0 ? (centerVar / avgCornerVar) : 1.0;
+    const invRatio = ratio > 0 ? (1 / ratio) : 1.0;
+    const maxRatio = Math.max(ratio, invRatio);
+    
+    // If maxRatio is high, it means noise profiles are inconsistent (e.g. face pasted onto background)
+    splicingRisk = Math.min(95, Math.max(0, Math.round((maxRatio - 1.25) * 35)));
+  }
+
+  // 2. Checkerboard grid upsampling (AI Generation Signature)
+  let aiGridRisk = 0;
+  if (patchAutocors.length > 0) {
+    const avgAutocor = patchAutocors.reduce((a, b) => a + b, 0) / patchAutocors.length;
+    if (avgAutocor < 1.05) {
+      aiGridRisk = Math.min(95, Math.max(0, Math.round((1.05 - avgAutocor) * 190)));
+    }
+  }
 
   if (varianceScore > 50) {
     warnings.push('Atypical flat sensor noise floor: indicates artificial texture synthesis (GAN smooth skin artifact).');
@@ -113,10 +171,18 @@ export function performPixelForensics(
   if (chromaticScore > 55) {
     warnings.push('Absence of lens dispersion: Red and Green color edges exhibit perfect synthetic alignment.');
   }
+  if (splicingRisk > 45) {
+    warnings.push(`Sensor noise discrepancy: Center region has a ${splicingRisk}% noise profile mismatch compared to outer borders (potential face-swap/splicing).`);
+  }
+  if (aiGridRisk > 45) {
+    warnings.push(`AI Periodic Upsampling Grid: Detected periodic pixel correlation anomalies at lag frequencies (${aiGridRisk}% confidence of AI generation checkerboard).`);
+  }
 
   return {
     varianceScore,
     chromaticScore,
+    splicingRisk,
+    aiGridRisk,
     warnings,
   };
 }
@@ -211,46 +277,51 @@ export function performELA(
 
             ctxDiff.putImageData(dataDiff, 0, 0);
 
-            // Identify anomaly coordinates (clusters with high deviation)
+            // Normalized average calculation
+            const cellPixelCount = gridWidth * gridHeight;
             let highDiffCount = 0;
-            let gridTotal = 0;
-            for (let gy = 0; gy < 16; gy++) {
-              for (let gx = 0; gx < 16; gx++) {
-                gridTotal += gridScores[gy][gx];
-              }
-            }
-            const averageGridScore = gridTotal / 256;
+            const cellScoresList: number[] = [];
 
             for (let gy = 0; gy < 16; gy++) {
               for (let gx = 0; gx < 16; gx++) {
-                const score = gridScores[gy][gx];
-                // If a grid block has difference far above average, it represents a suspicious composite edge
-                if (score > averageGridScore * 2.2 && score > 200) {
+                const score = gridScores[gy][gx] / (cellPixelCount || 1);
+                cellScoresList.push(score);
+              }
+            }
+
+            const avgCellScore = cellScoresList.reduce((a, b) => a + b, 0) / 256;
+
+            for (let gy = 0; gy < 16; gy++) {
+              for (let gx = 0; gx < 16; gx++) {
+                const score = gridScores[gy][gx] / (cellPixelCount || 1);
+                // Suspicious if a cell error level is more than 2.0x the average error, and exceeds noise threshold
+                if (score > avgCellScore * 2.0 && score > 1.5) {
                   highDiffCount++;
                   anomalies.push({
                     x: Math.floor((gx + 0.5) * gridWidth),
                     y: Math.floor((gy + 0.5) * gridHeight),
-                    confidence: Math.min(99, Math.round((score / (averageGridScore * 5)) * 50 + 40)),
+                    confidence: Math.min(99, Math.round((score / (avgCellScore * 4)) * 50 + 40)),
                   });
                 }
               }
             }
 
-            // Normalization of anomaly score (0-100)
-            const ratio = maxDiffPixelCount / (width * height);
-            let anomalyScore = Math.min(100, Math.round(ratio * 300 + highDiffCount * 6));
+            // Base ELA anomaly score based on average error and localized mismatches
+            const elaAnomalyScore = Math.min(95, Math.round(avgCellScore * 12 + highDiffCount * 8));
             
-            // Adjust anomaly score based on pixel textures (flat noise floor or high gradient alignment)
+            const splicingRisk = textureAnalysis.splicingRisk;
+            const aiGridRisk = textureAnalysis.aiGridRisk;
             const textureRisk = Math.max(textureAnalysis.varianceScore, textureAnalysis.chromaticScore);
-            if (textureRisk > 50 && anomalyScore > 20) {
-              // Major boost only if ELA base anomaly is already elevated (editing + smooth textures)
-              anomalyScore = Math.min(100, Math.round(anomalyScore * 0.5 + textureRisk * 0.5));
-            } else if (textureRisk > 60) {
-              // Minor contribution if image is extremely smooth but ELA has no editing mismatches
-              anomalyScore = Math.min(100, Math.max(anomalyScore, Math.round(anomalyScore * 0.85 + textureRisk * 0.15)));
-            }
+
+            // Combined overall image anomaly score
+            let anomalyScore = Math.round(
+              elaAnomalyScore * 0.3 + 
+              splicingRisk * 0.25 + 
+              aiGridRisk * 0.25 + 
+              textureRisk * 0.2
+            );
             
-            if (anomalyScore < 5) anomalyScore = 5; // Base noise
+            anomalyScore = Math.min(100, Math.max(5, anomalyScore));
 
             resolve({
               elaImageDataUrl: canvasDiff.toDataURL(),
