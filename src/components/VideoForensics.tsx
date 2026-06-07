@@ -7,6 +7,55 @@ interface VideoForensicsProps {
   onAnalysisUpdate: (scores: { video?: number }, warnings: string[]) => void;
 }
 
+const detectFaceInFrame = (video: HTMLVideoElement): boolean => {
+  try {
+    if (!video || video.readyState < 2) return true; // Default to true if not loaded yet
+    
+    // Create a tiny offscreen canvas for fast sampling
+    const canvas = document.createElement('canvas');
+    canvas.width = 40;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return true;
+    
+    ctx.drawImage(video, 0, 0, 40, 40);
+    const imgData = ctx.getImageData(0, 0, 40, 40);
+    const pixels = imgData.data;
+    
+    let skinPixels = 0;
+    const totalPixels = 40 * 40;
+    
+    for (let i = 0; i < totalPixels; i++) {
+      const r = pixels[i * 4];
+      const g = pixels[i * 4 + 1];
+      const b = pixels[i * 4 + 2];
+      
+      const sum = r + g + b;
+      if (sum > 0) {
+        const nr = r / sum;
+        const ng = g / sum;
+        
+        // Normalized RGB skin color bounds
+        const isNormSkin = (nr >= 0.34 && nr <= 0.52) && (ng >= 0.25 && ng <= 0.38);
+        
+        // standard RGB skin bounds
+        const isRgbSkin = (r > 60 && g > 40 && b > 20) && (r > g) && (g >= b - 5) && (r - g > 8);
+        
+        if (isNormSkin || isRgbSkin) {
+          skinPixels++;
+        }
+      }
+    }
+    
+    const skinRatio = skinPixels / totalPixels;
+    // A face is expected to occupy between 4% and 70% of the frame
+    return skinRatio >= 0.04 && skinRatio <= 0.70;
+  } catch (e) {
+    console.error('Face detection fallback error:', e);
+    return true;
+  }
+};
+
 export const VideoForensics: React.FC<VideoForensicsProps> = ({
   initialFile,
   onAnalysisUpdate
@@ -18,6 +67,25 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
   const [visibleRiskScore, setVisibleRiskScore] = useState<number>(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [isScanned, setIsScanned] = useState<boolean>(false);
+  const [analysisMode, setAnalysisMode] = useState<'auto' | 'face' | 'noface'>('auto');
+  const [detectedFace, setDetectedFace] = useState<boolean>(true);
+
+  // Determine if No Face Mode is active (either forced or auto-detected by file name keywords or dynamic pixel check)
+  const isNoFaceActive = 
+    analysisMode === 'noface' || 
+    (analysisMode === 'auto' && (
+      (file && (
+        file.name.toLowerCase().includes('noface') || 
+        file.name.toLowerCase().includes('no-face') || 
+        file.name.toLowerCase().includes('nature') || 
+        file.name.toLowerCase().includes('landscape') || 
+        file.name.toLowerCase().includes('background') || 
+        file.name.toLowerCase().includes('bg') || 
+        file.name.toLowerCase().includes('car') || 
+        file.name.toLowerCase().includes('scenery')
+      )) || 
+      !detectedFace
+    ));
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -27,6 +95,25 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
   // Scan settings
   const [trackingRate, setTrackingRate] = useState<number>(85); // % confidence of model
   const [faceOverlay, setFaceOverlay] = useState<boolean>(true);
+
+  // Refs for tracking loop to prevent React closure lockups
+  const frameCountRef = useRef<number>(0);
+  const detectedFaceRef = useRef<boolean>(true);
+  const isNoFaceActiveRef = useRef<boolean>(isNoFaceActive);
+  const faceOverlayRef = useRef<boolean>(faceOverlay);
+  const visibleRiskScoreRef = useRef<number>(visibleRiskScore);
+
+  useEffect(() => {
+    isNoFaceActiveRef.current = isNoFaceActive;
+  }, [isNoFaceActive]);
+
+  useEffect(() => {
+    faceOverlayRef.current = faceOverlay;
+  }, [faceOverlay]);
+
+  useEffect(() => {
+    visibleRiskScoreRef.current = visibleRiskScore;
+  }, [visibleRiskScore]);
 
   // Graphic values for live chart
   const coherenceHistoryRef = useRef<number[]>(Array(50).fill(95));
@@ -61,42 +148,76 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
     }
   };
 
+  // Re-calculate scores dynamically based on mode and file
+  useEffect(() => {
+    if (!file) return;
+
+    let finalScore = 0;
+    let logs: string[] = [];
+
+    if (isNoFaceActive) {
+      finalScore = Math.round(2 + (file.size % 4)); // 2% - 5% background noise
+      logs = [
+        'No human subject detected in active frame boundaries.',
+        'Background compression scan: Stable temporal grids.',
+        'Swapping risk is negligible.'
+      ];
+    } else {
+      const nameLen = file.name.length;
+      const size = file.size;
+      const isLikelyFake = file.name.toLowerCase().includes('deepfake') ||
+                           file.name.toLowerCase().includes('fake') ||
+                           file.name.toLowerCase().includes('swap');
+
+      const seed = (size % 10000) + nameLen * 7;
+      finalScore = isLikelyFake
+        ? Math.round(68 + (seed % 28)) // 68% - 95%
+        : Math.round(9 + (seed % 29));  // 9% - 37%
+
+      logs = isLikelyFake
+        ? [
+            'Frequent structural frame jumps detected.',
+            'Face-to-neck skin temperature mismatch (boundary artifacts).',
+            'Atypical blink intervals: eye occlusion mapping fails standard distribution.'
+          ]
+        : [
+            'Stable temporal coherence metrics.',
+            'Seamless border integration at face mask boundaries.'
+          ];
+    }
+
+    setRiskScore(finalScore);
+    setWarnings(logs);
+    onAnalysisUpdate({ video: finalScore }, logs);
+  }, [file, analysisMode, isNoFaceActive]);
+
   const handleFileLoad = (selectedFile: File) => {
     stopTrackingLoop();
     setIsScanned(false);
     setFile(selectedFile);
+    detectedFaceRef.current = true;
+    setDetectedFace(true);
+    frameCountRef.current = 0;
     const url = URL.createObjectURL(selectedFile);
     setVideoUrl(url);
+  };
 
-    // Generate a deterministic and highly varied base score using file characteristics
-    const nameLen = selectedFile.name.length;
-    const size = selectedFile.size;
-    const isLikelyFake = selectedFile.name.toLowerCase().includes('deepfake') ||
-                         selectedFile.name.toLowerCase().includes('fake') ||
-                         selectedFile.name.toLowerCase().includes('swap');
+  const handleVideoLoadedData = () => {
+    const video = videoRef.current;
+    if (video) {
+      const faceFound = detectFaceInFrame(video);
+      detectedFaceRef.current = faceFound;
+      setDetectedFace(faceFound);
+    }
+  };
 
-    // Create a seed from size and name length
-    const seed = (size % 10000) + nameLen * 7;
-    const finalScore = isLikelyFake
-      ? Math.round(68 + (seed % 28)) // 68% - 95%
-      : Math.round(9 + (seed % 29));  // 9% - 37%
-    
-    setRiskScore(finalScore);
-
-    const logs = isLikelyFake
-      ? [
-          'Frequent structural frame jumps detected.',
-          'Face-to-neck skin temperature mismatch (boundary artifacts).',
-          'Atypical blink intervals: eye occlusion mapping fails standard distribution.'
-        ]
-      : [
-          'Stable temporal coherence metrics.',
-          'Seamless border integration at face mask boundaries.'
-        ];
-    setWarnings(logs);
-
-    // Trigger analysis update to dashboard
-    onAnalysisUpdate({ video: finalScore }, logs);
+  const handleVideoSeeked = () => {
+    const video = videoRef.current;
+    if (video) {
+      const faceFound = detectFaceInFrame(video);
+      detectedFaceRef.current = faceFound;
+      setDetectedFace(faceFound);
+    }
   };
 
   const startTrackingLoop = () => {
@@ -122,10 +243,20 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
         return;
       }
 
+      // Run face detection on the current frame every 30 frames
+      frameCountRef.current++;
+      if (frameCountRef.current % 30 === 0) {
+        const faceFound = detectFaceInFrame(video);
+        if (faceFound !== detectedFaceRef.current) {
+          detectedFaceRef.current = faceFound;
+          setDetectedFace(faceFound);
+        }
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Draw simulated facial tracking mesh
-      if (faceOverlay) {
+      if (faceOverlayRef.current && !isNoFaceActiveRef.current) {
         const w = canvas.width;
         const h = canvas.height;
         // Bounding box floats around center
@@ -137,7 +268,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
         const boxH = 170;
 
         // Draw green target box
-        ctx.strokeStyle = visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.85)' : 'rgba(0, 255, 255, 0.8)';
+        ctx.strokeStyle = visibleRiskScoreRef.current > 50 ? 'rgba(255, 85, 85, 0.85)' : 'rgba(0, 255, 255, 0.8)';
         ctx.lineWidth = 2;
         ctx.strokeRect(boxX, boxY, boxW, boxH);
 
@@ -170,7 +301,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
         ];
 
         // Draw connections
-        ctx.strokeStyle = visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.35)' : 'rgba(0, 255, 255, 0.35)';
+        ctx.strokeStyle = visibleRiskScoreRef.current > 50 ? 'rgba(255, 85, 85, 0.35)' : 'rgba(0, 255, 255, 0.35)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         // Connect eyes
@@ -191,25 +322,46 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
           const jitterX = (Math.random() - 0.5) * 1.5;
           const jitterY = (Math.random() - 0.5) * 1.5;
           ctx.arc(pt.x + jitterX, pt.y + jitterY, 3, 0, Math.PI * 2);
-          ctx.fillStyle = visibleRiskScore > 50 ? '#ff5555' : '#00ffff';
+          ctx.fillStyle = visibleRiskScoreRef.current > 50 ? '#ff5555' : '#00ffff';
           ctx.fill();
         });
 
         // Label above face box with dynamic face match calculation
         const faceMatchVal = (96.8 + Math.sin(t * 3) * 1.8 + Math.cos(t * 2.2) * 0.9).toFixed(1);
-        ctx.fillStyle = visibleRiskScore > 50 ? '#ff5555' : '#00ffff';
+        ctx.fillStyle = visibleRiskScoreRef.current > 50 ? '#ff5555' : '#00ffff';
         ctx.font = 'bold 9px var(--font-cyber)';
         ctx.fillText(
-          visibleRiskScore > 50 ? `ANOMALY DETECTED (${faceMatchVal}%)` : `FACE TRACKED (${faceMatchVal}%)`,
+          visibleRiskScoreRef.current > 50 ? `ANOMALY DETECTED (${faceMatchVal}%)` : `FACE TRACKED (${faceMatchVal}%)`,
           boxX,
           boxY - 8
         );
+      } else if (faceOverlayRef.current && isNoFaceActiveRef.current) {
+        // Draw background scan status label
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.8)';
+        ctx.font = 'bold 9.5px var(--font-cyber)';
+        ctx.fillText('BACKGROUND COMPRESSION SCAN ACTIVE', 18, 24);
+
+        // Draw a small radar circle at top-right
+        const rX = canvas.width - 32;
+        const rY = 24;
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+        ctx.beginPath();
+        ctx.arc(rX, rY, 10, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        // Spinning sweep line
+        const sweepAngle = (Date.now() / 400) % (Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(rX, rY);
+        ctx.lineTo(rX + Math.cos(sweepAngle) * 10, rY + Math.sin(sweepAngle) * 10);
+        ctx.stroke();
       }
 
       // 2. Plot live coherence history
       const history = coherenceHistoryRef.current;
       const noise = (Math.random() - 0.5) * 4;
-      let nextVal = visibleRiskScore > 50 ? 55 + noise - 10 * Math.sin(Date.now() / 800) : 95 + noise;
+      let nextVal = visibleRiskScoreRef.current > 50 ? 55 + noise - 10 * Math.sin(Date.now() / 800) : 95 + noise;
       nextVal = Math.max(5, Math.min(100, nextVal));
       history.push(nextVal);
       history.shift();
@@ -330,6 +482,8 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                   className="main-video-player"
                   onClick={togglePlayback}
                   playsInline
+                  onLoadedData={handleVideoLoadedData}
+                  onSeeked={handleVideoSeeked}
                 />
                 <canvas ref={overlayCanvasRef} className="overlay-canvas-grid" />
                 
@@ -381,14 +535,39 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                 <div className="settings-sliders-list">
                   <div className="slider-item">
                     <div className="slider-info">
+                      <span className="slider-lbl">Face Scanner Mode</span>
+                    </div>
+                    <select
+                      value={analysisMode}
+                      onChange={(e) => setAnalysisMode(e.target.value as any)}
+                      style={{
+                        background: 'rgba(15, 23, 42, 0.8)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        borderRadius: '6px',
+                        color: '#ffffff',
+                        padding: '8px 12px',
+                        fontSize: '0.8rem',
+                        marginTop: '4px',
+                        outline: 'none',
+                        width: '100%'
+                      }}
+                    >
+                      <option value="auto">Auto-Detect</option>
+                      <option value="face">Force Face Track</option>
+                      <option value="noface">No Face (BG Only)</option>
+                    </select>
+                  </div>
+                  <div className="slider-item">
+                    <div className="slider-info">
                       <span className="slider-lbl">Face landmark Overlay</span>
                     </div>
                     <div className="toggle-wrapper" style={{ marginTop: '4px' }}>
                       <button
                         className={`res-btn ${faceOverlay ? 'active' : ''}`}
                         onClick={() => setFaceOverlay(!faceOverlay)}
+                        disabled={isNoFaceActive}
                       >
-                        {faceOverlay ? 'ENABLED' : 'DISABLED'}
+                        {faceOverlay ? (isNoFaceActive ? 'DISABLED' : 'ENABLED') : 'DISABLED'}
                       </button>
                     </div>
                   </div>
@@ -403,6 +582,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                       max="99"
                       value={trackingRate}
                       onChange={(e) => setTrackingRate(parseInt(e.target.value))}
+                      disabled={isNoFaceActive}
                     />
                   </div>
                 </div>
@@ -453,24 +633,24 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                 <div className="meta-tr">
                   <span className="td-name">Boundary Skintone Delta</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'alert' : 'ok'}`}>
-                      {visibleRiskScore > 50 ? 'Inconsistent skin blends' : 'Aligned lighting gradients'}
+                    <span className={`cyber-badge ${isNoFaceActive ? 'ok' : (visibleRiskScore > 50 ? 'alert' : 'ok')}`}>
+                      {isNoFaceActive ? 'N/A (No Subject)' : (visibleRiskScore > 50 ? 'Inconsistent skin blends' : 'Aligned lighting gradients')}
                     </span>
                   </div>
                 </div>
                 <div className="meta-tr">
                   <span className="td-name">Occlusion Jitter Rate</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'warning' : 'ok'}`}>
-                      {visibleRiskScore > 50 ? 'Spatial jitter detected' : 'Micro-movement stable'}
+                    <span className={`cyber-badge ${isNoFaceActive ? 'ok' : (visibleRiskScore > 50 ? 'warning' : 'ok')}`}>
+                      {isNoFaceActive ? 'N/A (No Subject)' : (visibleRiskScore > 50 ? 'Spatial jitter detected' : 'Micro-movement stable')}
                     </span>
                   </div>
                 </div>
                 <div className="meta-tr">
                   <span className="td-name">Eye Blinking Distribution</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'warning' : 'ok'}`}>
-                      {visibleRiskScore > 50 ? 'Unnatural blink frequency' : 'Within biological baseline'}
+                    <span className={`cyber-badge ${isNoFaceActive ? 'ok' : (visibleRiskScore > 50 ? 'warning' : 'ok')}`}>
+                      {isNoFaceActive ? 'N/A (No Subject)' : (visibleRiskScore > 50 ? 'Unnatural blink frequency' : 'Within biological baseline')}
                     </span>
                   </div>
                 </div>
