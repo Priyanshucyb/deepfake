@@ -8,3 +8,12 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
+
+// Register Service Worker for PWA offline capabilities
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => console.log('DEFEND.AI Service Worker registered:', reg.scope))
+      .catch((err) => console.error('DEFEND.AI Service Worker registration failed:', err));
+  });
+}
