@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, ShieldAlert, Cpu, Heart, Database, Terminal } from 'lucide-react';
+import { UploadCloud, ShieldAlert, Cpu, Heart, Database, Terminal, Award, Trash2, Download } from 'lucide-react';
 import { NeuralNodeMap } from './NeuralNodeMap';
 
 interface DashboardHomeProps {
@@ -24,6 +24,83 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     'Local Neural Network Models loaded successfully.',
     'Awaiting target media upload...'
   ]);
+  const [history, setHistory] = useState<any[]>([]);
+
+  const loadHistory = () => {
+    try {
+      const data = localStorage.getItem('defend_ai_certificates');
+      if (data) {
+        setHistory(JSON.parse(data));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  const deleteRecord = (scanId: string) => {
+    try {
+      const data = localStorage.getItem('defend_ai_certificates');
+      if (data) {
+        const list = JSON.parse(data);
+        const updated = list.filter((item: any) => item.scanId !== scanId);
+        localStorage.setItem('defend_ai_certificates', JSON.stringify(updated));
+        setHistory(updated);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const clearAllRecords = () => {
+    if (window.confirm('Are you sure you want to clear all cryptographic audit logs from this local registry?')) {
+      localStorage.removeItem('defend_ai_certificates');
+      setHistory([]);
+    }
+  };
+
+  const downloadHistoryJSON = (record: any) => {
+    const risks = [record.scores.image, record.scores.audio, record.scores.video].filter(
+      (s) => s !== undefined
+    ) as number[];
+    if (record.scores.metadata !== undefined) {
+      risks.push(100 - record.scores.metadata);
+    }
+    const riskIndex = risks.length > 0 ? Math.max(...risks) : 0;
+    const isDeepfake = riskIndex >= 50;
+
+    const reportData = {
+      scanId: record.scanId,
+      timestamp: record.timestamp,
+      fileInfo: {
+        name: record.fileName,
+        type: record.fileType,
+        size: record.fileSize,
+        hash: record.sha256
+      },
+      forensicMetrics: {
+        ...record.scores,
+        overallRiskIndex: riskIndex
+      },
+      warnings: record.warnings,
+      conclusion: isDeepfake
+        ? 'HIGH PROBABILITY OF SYNTHETIC/MODIFIED MEDIA (DEEPFAKE)'
+        : 'LOW PROBABILITY OF SYNTHETIC ALTERATION (AUTHENTIC)'
+    };
+
+    const blob = new Blob([JSON.stringify(reportData, null, 2)], {
+      type: 'application/json'
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `forensics-report-${record.scanId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     // Simulate cpu changes
@@ -221,6 +298,89 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
             videoScore={videoScore}
             metaScore={metaScore}
           />
+        </div>
+      </div>
+
+      {/* Cryptographic Registry Table */}
+      <div className="cyber-card registry-card">
+        <div className="panel-header registry-hdr" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+              <Award className="purple-glow-text" size={18} />
+              VERIFIED AUDIT REGISTRY
+            </h4>
+            <p className="panel-desc">Cryptographic history of certificates issued on this local machine.</p>
+          </div>
+          {history.length > 0 && (
+            <button className="clear-btn" onClick={clearAllRecords}>
+              Clear All Logs
+            </button>
+          )}
+        </div>
+
+        <div className="registry-table-wrapper">
+          {history.length === 0 ? (
+            <div className="registry-empty-state">
+              <p>No certificates issued yet. Upload files to run forensic checks and issue certificates.</p>
+            </div>
+          ) : (
+            <table className="registry-table">
+              <thead>
+                <tr>
+                  <th>Scan ID</th>
+                  <th>Date & Time</th>
+                  <th>Target File</th>
+                  <th>Risk Level</th>
+                  <th>Verdict</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((record) => {
+                  const risks = [record.scores.image, record.scores.audio, record.scores.video].filter(
+                    (s) => s !== undefined
+                  ) as number[];
+                  if (record.scores.metadata !== undefined) {
+                    risks.push(100 - record.scores.metadata);
+                  }
+                  const riskIndex = risks.length > 0 ? Math.max(...risks) : 0;
+                  const isDeepfake = riskIndex >= 50;
+
+                  return (
+                    <tr key={record.scanId}>
+                      <td className="code-font">{record.scanId}</td>
+                      <td>{record.timestamp}</td>
+                      <td className="truncate-cell" title={record.fileName}>{record.fileName}</td>
+                      <td className="code-font">{riskIndex}%</td>
+                      <td>
+                        <span className={`verdict-tag ${isDeepfake ? 'deepfake' : 'safe'}`}>
+                          {isDeepfake ? 'DEEPFAKE' : 'SAFE'}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div className="action-row">
+                          <button
+                            className="action-btn icon-btn"
+                            title="Download JSON Report"
+                            onClick={() => downloadHistoryJSON(record)}
+                          >
+                            <Download size={12} />
+                          </button>
+                          <button
+                            className="action-btn delete-btn icon-btn"
+                            title="Delete Record"
+                            onClick={() => deleteRecord(record.scanId)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
@@ -540,6 +700,137 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
         .log-time {
           color: var(--text-muted);
           margin-right: 4px;
+        }
+
+        .registry-card {
+          margin-top: 24px;
+        }
+
+        .registry-hdr {
+          margin-bottom: 16px;
+        }
+
+        .clear-btn {
+          background: transparent;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          color: var(--color-alert);
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-family: var(--font-primary);
+          font-size: 0.75rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .clear-btn:hover {
+          background: rgba(239, 68, 68, 0.08);
+          border-color: var(--color-alert);
+        }
+
+        .registry-table-wrapper {
+          overflow-x: auto;
+          background: rgba(5, 6, 10, 0.2);
+          border-radius: 8px;
+          border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .registry-empty-state {
+          padding: 30px;
+          text-align: center;
+          font-family: var(--font-primary);
+          font-size: 0.8rem;
+          color: var(--text-muted);
+        }
+
+        .registry-table {
+          width: 100%;
+          border-collapse: collapse;
+          text-align: left;
+          font-size: 0.8rem;
+        }
+
+        .registry-table th {
+          background: rgba(15, 23, 42, 0.6);
+          padding: 12px 16px;
+          color: var(--text-secondary);
+          font-weight: 600;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          font-family: var(--font-primary);
+        }
+
+        .registry-table td {
+          padding: 12px 16px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+          color: var(--text-primary);
+        }
+
+        .registry-table tr:hover td {
+          background: rgba(255, 255, 255, 0.01);
+        }
+
+        .code-font {
+          font-family: var(--font-mono);
+          color: var(--color-cyan);
+        }
+
+        .truncate-cell {
+          max-width: 180px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .verdict-tag {
+          font-family: var(--font-primary);
+          font-size: 0.7rem;
+          font-weight: 700;
+          padding: 2px 8px;
+          border-radius: 4px;
+        }
+
+        .verdict-tag.safe {
+          background: rgba(16, 185, 129, 0.1);
+          color: var(--color-ok);
+          border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .verdict-tag.deepfake {
+          background: rgba(239, 68, 68, 0.1);
+          color: var(--color-alert);
+          border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .action-row {
+          display: flex;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+
+        .icon-btn {
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: rgba(255, 255, 255, 0.02);
+          color: var(--text-secondary);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .icon-btn:hover {
+          background: rgba(59, 130, 246, 0.08);
+          border-color: rgba(59, 130, 246, 0.3);
+          color: var(--color-cyan);
+        }
+
+        .delete-btn:hover {
+          background: rgba(239, 68, 68, 0.08);
+          border-color: rgba(239, 68, 68, 0.3);
+          color: var(--color-alert);
         }
       `}</style>
     </div>

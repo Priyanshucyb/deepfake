@@ -28,8 +28,9 @@ export const ReportExporter: React.FC<ReportExporterProps> = ({
   useEffect(() => {
     // Generate simulated scan details
     const randId = 'DEF-' + Math.random().toString(36).substring(2, 11).toUpperCase();
+    const currentTimestamp = new Date().toLocaleString();
     setScanId(randId);
-    setTimestamp(new Date().toLocaleString());
+    setTimestamp(currentTimestamp);
 
     // Generate real-looking SHA-256
     const generateFakeHash = () => {
@@ -39,6 +40,29 @@ export const ReportExporter: React.FC<ReportExporterProps> = ({
         hash += hex[Math.floor(Math.random() * 16)];
       }
       setSha256(hash);
+
+      // Save to local registry history
+      try {
+        const existing = localStorage.getItem('defend_ai_certificates');
+        const list = existing ? JSON.parse(existing) : [];
+        const newRecord = {
+          scanId: randId,
+          timestamp: currentTimestamp,
+          fileName,
+          fileType,
+          fileSize,
+          sha256: hash,
+          scores,
+          warnings
+        };
+        // Avoid duplicate saves
+        if (!list.some((c: any) => c.scanId === randId)) {
+          list.unshift(newRecord);
+          localStorage.setItem('defend_ai_certificates', JSON.stringify(list.slice(0, 50)));
+        }
+      } catch (e) {
+        console.error('Failed to log certificate details:', e);
+      }
     };
 
     generateFakeHash();
