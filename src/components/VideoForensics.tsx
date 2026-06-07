@@ -15,6 +15,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [riskScore, setRiskScore] = useState<number>(35);
+  const [visibleRiskScore, setVisibleRiskScore] = useState<number>(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [isScanned, setIsScanned] = useState<boolean>(false);
 
@@ -29,6 +30,21 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
 
   // Graphic values for live chart
   const coherenceHistoryRef = useRef<number[]>(Array(50).fill(95));
+
+  // Animate the risk score presentation for real-time telemetry feeling
+  useEffect(() => {
+    setVisibleRiskScore(0);
+    let current = 0;
+    const interval = setInterval(() => {
+      if (current < riskScore) {
+        current = Math.min(riskScore, current + Math.ceil((riskScore - current) * 0.15));
+        setVisibleRiskScore(current);
+      } else {
+        clearInterval(interval);
+      }
+    }, 45);
+    return () => clearInterval(interval);
+  }, [riskScore]);
 
   useEffect(() => {
     if (initialFile) {
@@ -52,11 +68,19 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
     const url = URL.createObjectURL(selectedFile);
     setVideoUrl(url);
 
-    // Simulate high/low risk deepfake based on filename
+    // Generate a deterministic and highly varied base score using file characteristics
+    const nameLen = selectedFile.name.length;
+    const size = selectedFile.size;
     const isLikelyFake = selectedFile.name.toLowerCase().includes('deepfake') ||
                          selectedFile.name.toLowerCase().includes('fake') ||
-                         Math.random() > 0.6;
-    const finalScore = isLikelyFake ? Math.round(65 + Math.random() * 28) : Math.round(12 + Math.random() * 15);
+                         selectedFile.name.toLowerCase().includes('swap');
+
+    // Create a seed from size and name length
+    const seed = (size % 10000) + nameLen * 7;
+    const finalScore = isLikelyFake
+      ? Math.round(68 + (seed % 28)) // 68% - 95%
+      : Math.round(9 + (seed % 29));  // 9% - 37%
+    
     setRiskScore(finalScore);
 
     const logs = isLikelyFake
@@ -109,24 +133,24 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
         const boxX = w / 2 - 70 + Math.sin(t * 1.5) * 5;
         const boxY = h / 2 - 90 + Math.cos(t * 1.2) * 5;
         const boxW = 140;
+        const boxXCornerTickLength = 15;
         const boxH = 170;
 
         // Draw green target box
-        ctx.strokeStyle = riskScore > 50 ? 'rgba(255, 85, 85, 0.85)' : 'rgba(0, 255, 255, 0.8)';
+        ctx.strokeStyle = visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.85)' : 'rgba(0, 255, 255, 0.8)';
         ctx.lineWidth = 2;
         ctx.strokeRect(boxX, boxY, boxW, boxH);
 
         // Corner ticks
-        const tl = 15; // Tick length
         ctx.beginPath();
         // Top Left
-        ctx.moveTo(boxX, boxY + tl); ctx.lineTo(boxX, boxY); ctx.lineTo(boxX + tl, boxY);
+        ctx.moveTo(boxX, boxY + boxXCornerTickLength); ctx.lineTo(boxX, boxY); ctx.lineTo(boxX + boxXCornerTickLength, boxY);
         // Top Right
-        ctx.moveTo(boxX + boxW - tl, boxY); ctx.lineTo(boxX + boxW, boxY); ctx.lineTo(boxX + boxW, boxY + tl);
+        ctx.moveTo(boxX + boxW - boxXCornerTickLength, boxY); ctx.lineTo(boxX + boxW, boxY); ctx.lineTo(boxX + boxW, boxY + boxXCornerTickLength);
         // Bottom Left
-        ctx.moveTo(boxX, boxY + boxH - tl); ctx.lineTo(boxX, boxY + boxH); ctx.lineTo(boxX + tl, boxY + boxH);
+        ctx.moveTo(boxX, boxY + boxH - boxXCornerTickLength); ctx.lineTo(boxX, boxY + boxH); ctx.lineTo(boxX + boxXCornerTickLength, boxY + boxH);
         // Bottom Right
-        ctx.moveTo(boxX + boxW - tl, boxY + boxH); ctx.lineTo(boxX + boxW, boxY + boxH); ctx.lineTo(boxX + boxW, boxY + boxH - tl);
+        ctx.moveTo(boxX + boxW - boxXCornerTickLength, boxY + boxH); ctx.lineTo(boxX + boxW, boxY + boxH); ctx.lineTo(boxX + boxW, boxY + boxH - boxXCornerTickLength);
         ctx.stroke();
 
         // Facial landmarks points
@@ -146,7 +170,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
         ];
 
         // Draw connections
-        ctx.strokeStyle = riskScore > 50 ? 'rgba(255, 85, 85, 0.35)' : 'rgba(0, 255, 255, 0.35)';
+        ctx.strokeStyle = visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.35)' : 'rgba(0, 255, 255, 0.35)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         // Connect eyes
@@ -167,15 +191,16 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
           const jitterX = (Math.random() - 0.5) * 1.5;
           const jitterY = (Math.random() - 0.5) * 1.5;
           ctx.arc(pt.x + jitterX, pt.y + jitterY, 3, 0, Math.PI * 2);
-          ctx.fillStyle = riskScore > 50 ? '#ff5555' : '#00ffff';
+          ctx.fillStyle = visibleRiskScore > 50 ? '#ff5555' : '#00ffff';
           ctx.fill();
         });
 
-        // Label above face box
-        ctx.fillStyle = riskScore > 50 ? '#ff5555' : '#00ffff';
+        // Label above face box with dynamic face match calculation
+        const faceMatchVal = (96.8 + Math.sin(t * 3) * 1.8 + Math.cos(t * 2.2) * 0.9).toFixed(1);
+        ctx.fillStyle = visibleRiskScore > 50 ? '#ff5555' : '#00ffff';
         ctx.font = 'bold 9px var(--font-cyber)';
         ctx.fillText(
-          riskScore > 50 ? 'ANOMALY DETECTED' : 'FACE TRACKED (98.4%)',
+          visibleRiskScore > 50 ? `ANOMALY DETECTED (${faceMatchVal}%)` : `FACE TRACKED (${faceMatchVal}%)`,
           boxX,
           boxY - 8
         );
@@ -184,7 +209,7 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
       // 2. Plot live coherence history
       const history = coherenceHistoryRef.current;
       const noise = (Math.random() - 0.5) * 4;
-      let nextVal = riskScore > 50 ? 55 + noise - 10 * Math.sin(Date.now() / 800) : 95 + noise;
+      let nextVal = visibleRiskScore > 50 ? 55 + noise - 10 * Math.sin(Date.now() / 800) : 95 + noise;
       nextVal = Math.max(5, Math.min(100, nextVal));
       history.push(nextVal);
       history.shift();
@@ -244,13 +269,13 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
       else ctx.lineTo(x, y);
     });
 
-    ctx.strokeStyle = riskScore > 50 ? 'rgba(255, 85, 85, 0.8)' : 'rgba(0, 255, 255, 0.8)';
+    ctx.strokeStyle = visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.8)' : 'rgba(0, 255, 255, 0.8)';
     ctx.lineWidth = 2;
     ctx.stroke();
 
     // Area fill gradient
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, riskScore > 50 ? 'rgba(255, 85, 85, 0.25)' : 'rgba(0, 255, 255, 0.25)');
+    gradient.addColorStop(0, visibleRiskScore > 50 ? 'rgba(255, 85, 85, 0.25)' : 'rgba(0, 255, 255, 0.25)');
     gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.lineTo(width, height);
     ctx.lineTo(0, height);
@@ -259,10 +284,10 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
     ctx.fill();
   };
 
-  // Draw chart once at mount
+  // Draw chart once at mount and when risk changes
   useEffect(() => {
     drawChart();
-  }, [riskScore]);
+  }, [visibleRiskScore]);
 
   return (
     <div className="video-forensics-container">
@@ -395,8 +420,8 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                 <div className="scores-columns">
                   <div className="score-widget full-widget">
                     <span className="score-lbl">DEEPFAKE RISK RATING</span>
-                    <span className={`score-val ${riskScore > 50 ? 'alert' : 'ok'}`}>
-                      {riskScore}%
+                    <span className={`score-val ${visibleRiskScore > 50 ? 'alert' : 'ok'}`}>
+                      {visibleRiskScore}%
                     </span>
                   </div>
                 </div>
@@ -428,24 +453,24 @@ export const VideoForensics: React.FC<VideoForensicsProps> = ({
                 <div className="meta-tr">
                   <span className="td-name">Boundary Skintone Delta</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${riskScore > 50 ? 'alert' : 'ok'}`}>
-                      {riskScore > 50 ? 'Inconsistent skin blends' : 'Aligned lighting gradients'}
+                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'alert' : 'ok'}`}>
+                      {visibleRiskScore > 50 ? 'Inconsistent skin blends' : 'Aligned lighting gradients'}
                     </span>
                   </div>
                 </div>
                 <div className="meta-tr">
                   <span className="td-name">Occlusion Jitter Rate</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${riskScore > 50 ? 'warning' : 'ok'}`}>
-                      {riskScore > 50 ? 'Spatial jitter detected' : 'Micro-movement stable'}
+                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'warning' : 'ok'}`}>
+                      {visibleRiskScore > 50 ? 'Spatial jitter detected' : 'Micro-movement stable'}
                     </span>
                   </div>
                 </div>
                 <div className="meta-tr">
                   <span className="td-name">Eye Blinking Distribution</span>
                   <div className="td-val-block">
-                    <span className={`cyber-badge ${riskScore > 50 ? 'warning' : 'ok'}`}>
-                      {riskScore > 50 ? 'Unnatural blink frequency' : 'Within biological baseline'}
+                    <span className={`cyber-badge ${visibleRiskScore > 50 ? 'warning' : 'ok'}`}>
+                      {visibleRiskScore > 50 ? 'Unnatural blink frequency' : 'Within biological baseline'}
                     </span>
                   </div>
                 </div>
