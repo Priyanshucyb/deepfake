@@ -27,13 +27,44 @@ export const AdminPortal: React.FC = () => {
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-  // Load admin history from localStorage
+  // Load admin history from localStorage (merges manually imported and local user certificates)
   const loadAdminRecords = () => {
     try {
-      const data = localStorage.getItem('defend_ai_admin_certificates');
-      if (data) {
-        setRecords(JSON.parse(data));
-      }
+      // 1. Get manually imported certificates
+      const adminData = localStorage.getItem('defend_ai_admin_certificates');
+      const importedRecords: AdminCertificate[] = adminData ? JSON.parse(adminData) : [];
+
+      // 2. Get locally generated user certificates
+      const userData = localStorage.getItem('defend_ai_certificates');
+      const userRecords: AdminCertificate[] = userData ? JSON.parse(userData) : [];
+
+      // 3. Merge them, keeping unique scanId
+      const mergedMap = new Map<string, AdminCertificate>();
+      
+      // Load user generated certificates first
+      userRecords.forEach((r) => {
+        if (r && r.scanId) {
+          mergedMap.set(r.scanId, r);
+        }
+      });
+
+      // Load imported ones (overwrite/update in case of overlaps)
+      importedRecords.forEach((r) => {
+        if (r && r.scanId) {
+          mergedMap.set(r.scanId, r);
+        }
+      });
+
+      const mergedList = Array.from(mergedMap.values());
+
+      // Sort by timestamp (newest first)
+      mergedList.sort((a, b) => {
+        const timeA = new Date(a.timestamp).getTime() || 0;
+        const timeB = new Date(b.timestamp).getTime() || 0;
+        return timeB - timeA;
+      });
+
+      setRecords(mergedList);
     } catch (e) {
       console.error('Failed to load admin records:', e);
     }
@@ -89,80 +120,112 @@ export const AdminPortal: React.FC = () => {
     let successCount = 0;
     let errorMsg = '';
 
-    const newRecords: AdminCertificate[] = [...records];
+    try {
+      const adminData = localStorage.getItem('defend_ai_admin_certificates');
+      const currentImported: AdminCertificate[] = adminData ? JSON.parse(adminData) : [];
+      const newImported: AdminCertificate[] = [...currentImported];
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
-        errorMsg = `File "${file.name}" is not a valid JSON.`;
-        continue;
-      }
-
-      try {
-        const text = await file.text();
-        const parsed = JSON.parse(text);
-
-        // Validate basic report schema structure
-        if (
-          parsed.scanId &&
-          parsed.timestamp &&
-          parsed.fileInfo &&
-          parsed.forensicMetrics &&
-          parsed.warnings
-        ) {
-          const recordToImport: AdminCertificate = {
-            scanId: parsed.scanId,
-            timestamp: parsed.timestamp,
-            fileName: parsed.fileInfo.name,
-            fileType: parsed.fileInfo.type,
-            fileSize: parsed.fileInfo.size,
-            sha256: parsed.fileInfo.hash,
-            scores: {
-              image: parsed.forensicMetrics.image,
-              audio: parsed.forensicMetrics.audio,
-              video: parsed.forensicMetrics.video,
-              metadata: parsed.forensicMetrics.metadata
-            },
-            warnings: parsed.warnings
-          };
-
-          // Avoid duplicates
-          if (!newRecords.some(r => r.scanId === recordToImport.scanId)) {
-            newRecords.unshift(recordToImport);
-            successCount++;
-          }
-        } else {
-          errorMsg = `File "${file.name}" has an invalid schema format.`;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
+          errorMsg = `File "${file.name}" is not a valid JSON.`;
+          continue;
         }
-      } catch (e) {
-        errorMsg = `Failed to parse file "${file.name}".`;
-      }
-    }
 
-    if (successCount > 0) {
-      localStorage.setItem('defend_ai_admin_certificates', JSON.stringify(newRecords));
-      setRecords(newRecords);
-      setImportStatus({
-        type: 'success',
-        message: `Successfully verified and imported ${successCount} certificate report(s).`
-      });
-    } else if (errorMsg) {
-      setImportStatus({ type: 'error', message: errorMsg });
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+
+          // Validate basic report schema structure
+          if (
+            parsed.scanId &&
+            parsed.timestamp &&
+            parsed.fileInfo &&
+            parsed.forensicMetrics &&
+            parsed.warnings
+          ) {
+            const recordToImport: AdminCertificate = {
+              scanId: parsed.scanId,
+              timestamp: parsed.timestamp,
+              fileName: parsed.fileInfo.name,
+              fileType: parsed.fileInfo.type,
+              fileSize: parsed.fileInfo.size,
+              sha256: parsed.fileInfo.hash,
+              scores: {
+                image: parsed.forensicMetrics.image,
+                audio: parsed.forensicMetrics.audio,
+                video: parsed.forensicMetrics.video,
+                metadata: parsed.forensicMetrics.metadata
+              },
+              warnings: parsed.warnings
+            };
+
+            // Avoid duplicates in imported list
+            if (!newImported.some(r => r.scanId === recordToImport.scanId)) {
+              newImported.unshift(recordToImport);
+              successCount++;
+            }
+          } else {
+            errorMsg = `File "${file.name}" has an invalid schema format.`;
+          }
+        } catch (e) {
+          errorMsg = `Failed to parse file "${file.name}".`;
+        }
+      }
+
+      if (successCount > 0) {
+        localStorage.setItem('defend_ai_admin_certificates', JSON.stringify(newImported));
+        loadAdminRecords();
+        setImportStatus({
+          type: 'success',
+          message: `Successfully verified and imported ${successCount} certificate report(s).`
+        });
+      } else if (errorMsg) {
+        setImportStatus({ type: 'error', message: errorMsg });
+      }
+    } catch (e) {
+      console.error(e);
+      setImportStatus({ type: 'error', message: 'Failed to process files.' });
     }
   };
 
   const deleteRecord = (scanId: string) => {
-    const updated = records.filter(r => r.scanId !== scanId);
-    localStorage.setItem('defend_ai_admin_certificates', JSON.stringify(updated));
-    setRecords(updated);
+    // 1. Delete from defend_ai_admin_certificates
+    try {
+      const adminData = localStorage.getItem('defend_ai_admin_certificates');
+      if (adminData) {
+        const list = JSON.parse(adminData);
+        const updated = list.filter((r: any) => r.scanId !== scanId);
+        localStorage.setItem('defend_ai_admin_certificates', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 2. Delete from defend_ai_certificates (local user ones)
+    try {
+      const userData = localStorage.getItem('defend_ai_certificates');
+      if (userData) {
+        const list = JSON.parse(userData);
+        const updated = list.filter((r: any) => r.scanId !== scanId);
+        localStorage.setItem('defend_ai_certificates', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 3. Reload merged database
+    loadAdminRecords();
+
     if (inspectingRecord?.scanId === scanId) {
       setInspectingRecord(null);
     }
   };
 
   const clearAllRecords = () => {
-    if (window.confirm('Clear all imported certificates from the Admin Master Console?')) {
+    if (window.confirm('Clear all certificates (including local user records and imported ones) from the Admin Master Console?')) {
       localStorage.removeItem('defend_ai_admin_certificates');
+      localStorage.removeItem('defend_ai_certificates');
       setRecords([]);
       setInspectingRecord(null);
     }

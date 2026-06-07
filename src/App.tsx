@@ -14,6 +14,26 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
+  // Check if admin mode is enabled via URL query parameter or localStorage
+  const [isAdminMode, setIsAdminMode] = useState<boolean>(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('admin') === 'true') {
+      localStorage.setItem('defend_ai_admin_mode', 'true');
+      return true;
+    }
+    return localStorage.getItem('defend_ai_admin_mode') === 'true';
+  });
+
+  const handleLogoDoubleClick = () => {
+    const nextState = !isAdminMode;
+    localStorage.setItem('defend_ai_admin_mode', nextState.toString());
+    setIsAdminMode(nextState);
+    alert(nextState ? '🔑 Admin mode activated! Admin Portal tab is now visible.' : '🔒 Admin mode deactivated. Admin Portal tab is hidden.');
+    if (!nextState && activeTab === 'admin') {
+      setActiveTab('dashboard');
+    }
+  };
+
   // File targets loaded across tabs
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -73,7 +93,7 @@ export default function App() {
     <div className="app-container">
       {/* Mobile Top Header */}
       <header className="mobile-top-bar">
-        <div className="mobile-brand">
+        <div className="mobile-brand" onDoubleClick={handleLogoDoubleClick} style={{ cursor: 'pointer' }} title="Double click to toggle Admin mode">
           <div className="mobile-brand-logo">
             <Shield size={16} />
           </div>
@@ -94,6 +114,8 @@ export default function App() {
         setActiveTab={setActiveTab}
         isOpen={sidebarOpen}
         setIsOpen={setSidebarOpen}
+        isAdminMode={isAdminMode}
+        setIsAdminMode={setIsAdminMode}
       />
 
       <main className="main-content-pane">

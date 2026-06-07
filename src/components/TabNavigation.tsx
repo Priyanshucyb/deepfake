@@ -16,27 +16,47 @@ interface TabNavigationProps {
   setActiveTab: (tab: string) => void;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
+  isAdminMode: boolean;
+  setIsAdminMode: (admin: boolean) => void;
 }
 
 export const TabNavigation: React.FC<TabNavigationProps> = ({
   activeTab,
   setActiveTab,
   isOpen,
-  setIsOpen
+  setIsOpen,
+  isAdminMode,
+  setIsAdminMode
 }) => {
-  const navItems = [
+  const baseItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'image', label: 'Image Forensics', icon: Image },
     { id: 'audio', label: 'Audio Analyzer', icon: Music },
     { id: 'video', label: 'Video Scanner', icon: Video },
     { id: 'live', label: 'Live Webcam Scanner', icon: Camera },
     { id: 'footprint', label: 'Footprint Tracer', icon: Globe },
-    { id: 'admin', label: 'Admin Portal', icon: Lock },
   ];
+
+  const navItems = isAdminMode
+    ? [...baseItems, { id: 'admin', label: 'Admin Portal', icon: Lock }]
+    : baseItems;
 
   return (
     <aside className="cyber-sidebar">
-      <div className="brand-container">
+      <div
+        className="brand-container"
+        onDoubleClick={() => {
+          const nextState = !isAdminMode;
+          localStorage.setItem('defend_ai_admin_mode', nextState.toString());
+          setIsAdminMode(nextState);
+          alert(nextState ? '🔑 Admin mode activated! Admin Portal tab is now visible.' : '🔒 Admin mode deactivated. Admin Portal tab is hidden.');
+          if (!nextState && activeTab === 'admin') {
+            setActiveTab('dashboard');
+          }
+        }}
+        style={{ cursor: 'pointer' }}
+        title="Double click to toggle Admin mode"
+      >
         <div className="brand-logo">
           <Shield className="logo-icon" />
         </div>
