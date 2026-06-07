@@ -308,8 +308,11 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
             <h4 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
               <Award className="purple-glow-text" size={18} />
               VERIFIED AUDIT REGISTRY
+              <span className="cyber-badge ok" style={{ fontSize: '0.62rem', marginLeft: '8px', verticalAlign: 'middle' }}>
+                🔒 100% Local Privacy
+              </span>
             </h4>
-            <p className="panel-desc">Cryptographic history of certificates issued on this local machine.</p>
+            <p className="panel-desc">Cryptographic history of certificates issued on this local machine. Data is stored entirely in your local browser sandbox and is never uploaded to any server.</p>
           </div>
           {history.length > 0 && (
             <button className="clear-btn" onClick={clearAllRecords}>
